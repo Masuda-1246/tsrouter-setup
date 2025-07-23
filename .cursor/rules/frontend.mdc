@@ -1,0 +1,370 @@
+---
+globs: src/routes/**/**.tsx,src/routes/**/**.ts
+alwaysApply: false
+---
+以下の構成を踏まえて、ViewModelパターンの設計・実装を強化し、React hooksの適切な使用方法を提案します。
+
+---
+
+## 📁 ディレクトリ構成
+（hogeはページごとに分かれます）
+* `src/routes/hoge/route.tsx` … ページコンポーネント（UIレンダリング専用）
+* `src/routes/hoge/route.model.ts` … ViewModelカスタムフック（状態管理・ビジネスロジック）
+* `src/routes/hoge/-components/` 以下 … 当該ページ固有の子コンポーネント
+* `src/components/features/` 以下 … 複数ページ共通の機能コンポーネント
+* `src/components/ui/` 以下 … 汎用UIコンポーネント
+
+---
+
+## ViewModelパターンでのカスタムフック実装
+
+### 1. **`route.model.ts` にViewModelカスタムフックを実装**
+
+```ts
+// src/routes/hoge/route.model.ts
+import { useToast } from '@/components/ui/Toast';
+import { client } from '@/lib/hono';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useNavigate } from '@tanstack/react-router';
+import { useEffect, useState } from 'react';
+
+/**
+ * hogeページのViewModelカスタムフック
+ * 状態管理とビジネスロジックを集約
+ */
+export function useHogeViewModel(searchParams?: any) {
+  // === すべてのフックを最初に呼び出し、条件付き呼び出しを避ける ===
+  const apiClient = client.api;
+  const { showToast } = useToast();
+  const queryClient = useQueryClient();
+  const navigate = useNavigate();
+
+  // フォーム状態
+  const [formData, setFormData] = useState({});
+  const [loading, setLoading] = useState(false);
+
+  // データクエリ
+  const dataQuery = useQuery({
+    queryKey: ['hoge-data'],
+    queryFn: async () => {
+      const res = await apiClient.hoge.$get();
+      return res.json();
+    },
+  });
+
+  // ミューテーション
+  const updateMutation = useMutation({
+    mutationFn: async (data: any) => {
+      return await apiClient.hoge.$post({ json: data });
+    },
+    onSuccess: () => {
+      showToast('更新が完了しました', 'success');
+      queryClient.invalidateQueries({ queryKey: ['hoge-data'] });
+    },
+    onError: (error) => {
+      showToast(`更新に失敗しました: ${error.message}`, 'error');
+    },
+  });
+
+  // 初期化処理
+  useEffect(() => {
+    // 初期化ロジック
+  }, []);
+
+  // === ここから非フック関数の定義 ===
+  
+  // ビジネスロジック関数
+  const handleSubmit = async (data: any) => {
+    setLoading(true);
+    try {
+      await updateMutation.mutateAsync(data);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleNavigation = (path: string) => {
+    navigate({ to: path });
+  };
+
+  return {
+    // 状態
+    formData,
+    loading,
+    // アクション
+    setFormData,
+    handleSubmit,
+    handleNavigation,
+    // クエリ
+    dataQuery,
+    // ミューテーション
+    updateMutation,
+  };
+}
+```
+
+### 2. **ページコンポーネントでViewModelを使用**
+
+```tsx
+// src/routes/hoge/route.tsx
+import { createFileRoute } from '@tanstack/react-router';
+import { PageContainer, PageHeader } from '@/components/layout/PageHeader';
+import { useHogeViewModel } from './route.model';
+import { HogeForm } from './-components/HogeForm';
+
+function HogePage() {
+  const searchParams = Route.useSearch();
+  const {
+    formData,
+    loading,
+    setFormData,
+    handleSubmit,
+    dataQuery,
+    updateMutation,
+  } = useHogeViewModel(searchParams);
+
+  return (
+    <PageContainer>
+      <PageHeader title="Hogeページ" />
+      
+      <HogeForm
+        data={formData}
+        loading={loading}
+        onSubmit={handleSubmit}
+        onChange={setFormData}
+      />
+    </PageContainer>
+  );
+}
+
+export const Route = createFileRoute('/hoge')({
+  component: HogePage,
+});
+```
+
+### 3. **ページ固有コンポーネントは純粋なUIコンポーネントに**
+
+```tsx
+// src/routes/hoge/-components/HogeForm.tsx
+interface HogeFormProps {
+  data: any;
+  loading: boolean;
+  onSubmit: (data: any) => void;
+  onChange: (data: any) => void;
+}
+
+export const HogeForm: React.FC<HogeFormProps> = ({
+  data,
+  loading,
+  onSubmit,
+  onChange,
+}) => {
+  // UIロジックのみ、ビジネスロジックは持たない
+  return (
+    <form onSubmit={onSubmit}>
+      {/* フォーム内容 */}
+    </form>
+  );
+};
+```
+
+---
+
+## React Hooksの適切な使用方法
+
+### 1. **フック呼び出しの順序厳守**
+
+```ts
+export function useViewModel() {
+  // ✅ 正しい：すべてのフックを最初に呼び出し
+  const navigate = useNavigate();
+  const queryClient = useQueryClient();
+  const [state, setState] = useState();
+  
+  const query = useQuery({...});
+  const mutation = useMutation({...});
+  
+  useEffect(() => {...}, []);
+  
+  // ✅ 正しい：非フック関数は最後に定義
+  const handleSomething = () => {
+    // ビジネスロジック
+  };
+  
+  return { state, handleSomething, query, mutation };
+}
+```
+
+### 2. **避けるべきアンチパターン**
+
+```ts
+// ❌ 間違い：条件付きフック呼び出し
+export function useViewModel() {
+  if (condition) {
+    const query = useQuery({...}); // これはNG
+  }
+  
+  // ❌ 間違い：ループ内でのフック呼び出し
+  for (let i = 0; i < items.length; i++) {
+    useState(); // これはNG
+  }
+  
+  // ❌ 間違い：クラスメソッド内でのフック呼び出し
+  class ViewModel {
+    getData() {
+      return useQuery({...}); // これはNG
+    }
+  }
+}
+```
+
+---
+
+## ファイルベースルーティングでの配置ルール
+
+### 1. **TanStack Routerとの親和性**
+
+```
+src/routes/
+├── index/
+│   ├── route.tsx          # / パス
+│   ├── route.model.ts     # ViewModelカスタムフック
+│   └── -components/       # ページ固有コンポーネント
+├── dashboard/
+│   ├── route.tsx          # /dashboard パス
+│   ├── route.model.ts
+│   └── -components/
+└── $id/                   # 動的パラメータ
+    ├── route.tsx          # /:id パス
+    ├── route.model.ts
+    ├── -components/
+    └── voices/
+        ├── route.tsx      # /:id/voices パス
+        └── route.model.ts
+```
+
+### 2. **コンポーネントの配置戦略**
+
+* **ページ固有のUI**: `src/routes/hoge/-components/`
+* **複数ページ共通の機能**: `src/components/features/`
+* **汎用UI部品**: `src/components/ui/`
+
+---
+
+## 強化ポイント：再利用可能なViewModelパターン
+
+### 1. **共通のViewModelベース**
+
+```ts
+// src/hooks/useBaseViewModel.ts
+export function useBaseViewModel() {
+  const { showToast } = useToast();
+  const queryClient = useQueryClient();
+  const navigate = useNavigate();
+
+  const handleSuccess = (message: string) => {
+    showToast(message, 'success');
+    queryClient.invalidateQueries();
+  };
+
+  const handleError = (error: Error) => {
+    showToast(`エラー: ${error.message}`, 'error');
+  };
+
+  return {
+    showToast,
+    queryClient,
+    navigate,
+    handleSuccess,
+    handleError,
+  };
+}
+
+// 各ページのViewModelで継承
+export function useHogeViewModel() {
+  const base = useBaseViewModel();
+  
+  // ページ固有のロジック
+  const specificLogic = () => {
+    // 実装
+  };
+
+  return {
+    ...base,
+    specificLogic,
+  };
+}
+```
+
+### 2. **型安全なViewModelインターフェース**
+
+```ts
+// src/types/viewModel.ts
+export interface BaseViewModel {
+  loading: boolean;
+  error: string | null;
+  handleSuccess: (message: string) => void;
+  handleError: (error: Error) => void;
+}
+
+export interface HogeViewModel extends BaseViewModel {
+  formData: HogeFormData;
+  handleSubmit: (data: HogeFormData) => Promise<void>;
+  handleNavigation: (path: string) => void;
+}
+```
+
+---
+
+## 実装時の注意点
+
+### 1. **パフォーマンス最適化**
+
+```ts
+// useCallbackを適切に使用
+const handleSubmit = useCallback(async (data: any) => {
+  // 処理
+}, [dependency]);
+
+// useMemoでの計算キャッシュ
+const expensiveValue = useMemo(() => {
+  return heavyCalculation(data);
+}, [data]);
+```
+
+### 2. **エラーハンドリングの統一**
+
+```ts
+export function useViewModel() {
+  const mutation = useMutation({
+    mutationFn: async (data) => {
+      try {
+        return await apiCall(data);
+      } catch (error) {
+        console.error('API呼び出しエラー:', error);
+        throw error;
+      }
+    },
+    onError: (error) => {
+      // 統一されたエラーハンドリング
+      showToast(`処理に失敗しました: ${error.message}`, 'error');
+    },
+  });
+
+  return { mutation };
+}
+```
+
+---
+
+## まとめ
+
+| 概念 | 配置先 | 役割 |
+|------|--------|------|
+| ViewModelカスタムフック | `src/routes/hoge/route.model.ts` | 状態管理・ビジネスロジック |
+| ページコンポーネント | `src/routes/hoge/route.tsx` | UIレンダリング専用 |
+| ページ固有UI | `src/routes/hoge/-components/` | 純粋なUIコンポーネント |
+| 共通機能 | `src/components/features/` | 複数ページで使用する機能 |
+| 汎用UI | `src/components/ui/` | 基本的なUIコンポーネント |
+
+この構成により、ViewModelパターンによるロジック分離、React hooksの適切な使用、型安全性の確保、再利用性の向上、TanStack Routerとの自然な統合を実現できます。
