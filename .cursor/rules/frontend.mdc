@@ -2,9 +2,9 @@
 globs: src/routes/**/**.tsx,src/routes/**/**.ts
 alwaysApply: false
 ---
-以下の構成を踏まえて、ViewModelパターンの設計・実装を強化し、React hooksの適切な使用方法を提案します。
-
----
+## 必ずやること
+- タスクを終了したあと必ず`pnpm run check:fix` `pnpm run build`を実行してエラーが出ないことを確認すること
+- エラーが出てる場合は解消されるまで修正を繰り返すものとする
 
 ## 📁 ディレクトリ構成
 （hogeはページごとに分かれます）
